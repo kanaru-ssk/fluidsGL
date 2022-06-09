@@ -63,8 +63,8 @@ void initGL(int *argc, char **argv)
 	glutReshapeFunc(reshape);
 	glutCloseFunc(cleanup);
 
-//	glewExperimental = GL_TRUE;
-//	glewInit();
+	//	glewExperimental = GL_TRUE;
+	//	glewInit();
 
 	app::setup();
 }
@@ -72,6 +72,6 @@ void initGL(int *argc, char **argv)
 int main(int argc, char **argv)
 {
 	initGL(&argc, argv);
-        glutMainLoop();
+	glutMainLoop();
 	return 0;
 }

@@ -29,7 +29,7 @@ addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int 
 // interpolation in the velocity space.
 __global__ void
 advectVelocity_k(cData *v, float *vx, float *vy,
-                 int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t  tex);
+                 int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t tex);
 
 // This method performs velocity diffusion and forces mass conservation
 // in the frequency domain. The inputs 'vx' and 'vy' are complex-valued
@@ -58,4 +58,3 @@ advectParticles_k(cData *part, cData *v, int dx, int dy,
                   float dt, int lb, size_t pitch);
 
 #endif
-

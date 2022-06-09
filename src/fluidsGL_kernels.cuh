@@ -60,4 +60,3 @@ advectParticles_k(cData *part, cData *v, int dx, int dy,
                   float dt, int lb, size_t pitch);
 
 #endif
-
