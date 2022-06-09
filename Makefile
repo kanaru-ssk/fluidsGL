@@ -15,7 +15,7 @@ OBJS:=$(subst .cu,.o,$(OBJS))
 INCDIR = -I../../common/inc
 
 LIBDIR = -L../../common/lib/linux/aarch64
-LIBS = -lGL -lglut -lGLEW -lGLU -lcufft
+LIBS = -lGL -lglut -lGLU -lcufft
 
 $(TARGET): $(OBJS)
 	[ -d $(TARGETDIR) ] || mkdir $(TARGETDIR)

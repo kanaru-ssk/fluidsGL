@@ -63,9 +63,6 @@ void initGL(int *argc, char **argv)
 	glutReshapeFunc(reshape);
 	glutCloseFunc(cleanup);
 
-	//	glewExperimental = GL_TRUE;
-	//	glewInit();
-
 	app::setup();
 }
 
