@@ -6,13 +6,13 @@
 #include "app.h"
 
 // const char *sSDKname = "fluidsGL";
-//  CUDA example code that implements the frequency space version of
-//  Jos Stam's paper 'Stable Fluids' in 2D. This application uses the
-//  CUDA FFT library (CUFFT) to perform velocity diffusion and to
-//  force non-divergence in the velocity field at each time step. It uses
-//  CUDA-OpenGL interoperability to update the particle field directly
-//  instead of doing a copy to system memory before drawing. Texture is
-//  used for automatic bilinear interpolation at the velocity advection step.
+// CUDA example code that implements the frequency space version of
+// Jos Stam's paper 'Stable Fluids' in 2D. This application uses the
+// CUDA FFT library (CUFFT) to perform velocity diffusion and to
+// force non-divergence in the velocity field at each time step. It uses
+// CUDA-OpenGL interoperability to update the particle field directly
+// instead of doing a copy to system memory before drawing. Texture is
+// used for automatic bilinear interpolation at the velocity advection step.
 
 // CUFFT plan handle
 cufftHandle planr2c;
@@ -20,8 +20,8 @@ cufftHandle planc2r;
 static cData *vxfield = NULL;
 static cData *vyfield = NULL;
 
-cData *hvfield = NULL;
-cData *dvfield = NULL;
+cData *hvfield = NULL; // host velocity field
+cData *dvfield = NULL; // device velocity field
 static int wWidth = MAX(512, DIM);
 static int wHeight = MAX(512, DIM);
 
@@ -57,19 +57,20 @@ extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt);
 
 void app::setup(void)
 {
-	// Allocate and initialize host data
-	GLint bsize;
-
+	// 実行時間取得用のタイマー
 	sdkCreateTimer(&timer);
 	sdkResetTimer(&timer);
 
-	hvfield = (cData *)malloc(sizeof(cData) * DS);
-	memset(hvfield, 0, sizeof(cData) * DS);
+	// Allocate and initialize host data
+	hvfield = (cData *)malloc(sizeof(cData) * NUM_PRTICLES);
+	memset(hvfield, 0, sizeof(cData) * NUM_PRTICLES);
 
 	// Allocate and initialize device data
 	cudaMallocPitch((void **)&dvfield, &tPitch, sizeof(cData) * DIM, DIM);
 
-	cudaMemcpy(dvfield, hvfield, sizeof(cData) * DS, cudaMemcpyHostToDevice);
+	// host to dicice
+	cudaMemcpy(dvfield, hvfield, sizeof(cData) * NUM_PRTICLES, cudaMemcpyHostToDevice);
+
 	// Temporary complex velocity field data
 	cudaMalloc((void **)&vxfield, sizeof(cData) * PDS);
 	cudaMalloc((void **)&vyfield, sizeof(cData) * PDS);
@@ -77,10 +78,9 @@ void app::setup(void)
 	setupTexture(DIM, DIM);
 
 	// Create particle array
-	particles = (cData *)malloc(sizeof(cData) * DS);
-	memset(particles, 0, sizeof(cData) * DS);
+	particles = (cData *)malloc(sizeof(cData) * NUM_PRTICLES);
+	memset(particles, 0, sizeof(cData) * NUM_PRTICLES);
 
-	// initParticles(particles, DIM, DIM);
 	// 初期位置設定
 	for (unsigned int y = 0; y < DIM; y++)
 	{
@@ -97,11 +97,12 @@ void app::setup(void)
 
 	glGenBuffers(1, &vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(cData) * DS, particles, GL_DYNAMIC_DRAW_ARB);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(cData) * NUM_PRTICLES, particles, GL_DYNAMIC_DRAW_ARB);
 
+	GLint bsize; // Allocate and initialize host data
 	glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize);
 
-	if (bsize != (sizeof(cData) * DS))
+	if (bsize != (sizeof(cData) * NUM_PRTICLES))
 	{
 		printf("Failed to initialize GL extensions.\n");
 		exit(EXIT_FAILURE);
@@ -116,13 +117,13 @@ void app::setup(void)
 void app::update(void)
 {
 	sdkStartTimer(&timer);
-	// simulate fluid
+
 	advectVelocity(dvfield, (float *)vxfield, (float *)vyfield, DIM, RPADW, DIM, DT);
-	diffuseProject(vxfield, vyfield, CPADW, DIM, DT, VIS);
+	diffuseProject(vxfield, vyfield, CPADW, DIM, DT, VISCOSITY);
 	updateVelocity(dvfield, (float *)vxfield, (float *)vyfield, DIM, RPADW, DIM);
 	advectParticles(vbo, dvfield, DIM, DIM, DT);
 
-	glutPostRedisplay();
+	glutPostRedisplay(); // openGLに再描画を指示
 }
 
 void app::defineViewMatrix(void)
@@ -142,9 +143,9 @@ void app::defineViewMatrix(void)
 void app::draw(void)
 {
 	defineViewMatrix();
+
 	// render points from vertex buffer
 	glClear(GL_COLOR_BUFFER_BIT);
-
 	glColor4f(0, 1, 0, 0.5f);
 	glPointSize(1);
 	glEnable(GL_POINT_SMOOTH);
@@ -153,10 +154,12 @@ void app::draw(void)
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_CULL_FACE);
+
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	glVertexPointer(2, GL_FLOAT, 0, NULL);
-	glDrawArrays(GL_POINTS, 0, DS);
+	glDrawArrays(GL_POINTS, 0, NUM_PRTICLES);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 	glDisable(GL_TEXTURE_2D);
@@ -184,15 +187,15 @@ void app::keyPressed(unsigned char key)
 	switch (key)
 	{
 	case 'r':
-		memset(hvfield, 0, sizeof(cData) * DS);
-		cudaMemcpy(dvfield, hvfield, sizeof(cData) * DS, cudaMemcpyHostToDevice);
+		memset(hvfield, 0, sizeof(cData) * NUM_PRTICLES);
+		cudaMemcpy(dvfield, hvfield, sizeof(cData) * NUM_PRTICLES, cudaMemcpyHostToDevice);
 
 		cudaGraphicsUnregisterResource(cuda_vbo_resource);
 
 		getLastCudaError("cudaGraphicsUnregisterBuffer failed");
 
 		glBindBuffer(GL_ARRAY_BUFFER, vbo);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(cData) * DS,
+		glBufferData(GL_ARRAY_BUFFER, sizeof(cData) * NUM_PRTICLES,
 					 particles, GL_DYNAMIC_DRAW_ARB);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
 
@@ -236,7 +239,7 @@ void app::mouseDragged(int x, int y)
 		lasty = y;
 	}
 
-	glutPostRedisplay();
+	glutPostRedisplay(); // openGLに再描画を指示
 }
 
 void app::windowResize(int width, int height)
@@ -245,7 +248,7 @@ void app::windowResize(int width, int height)
 	wHeight = height;
 
 	defineViewMatrix();
-	glutPostRedisplay();
+	glutPostRedisplay(); // openGLに再描画を指示
 }
 
 void app::end(void)

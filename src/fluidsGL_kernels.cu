@@ -1,14 +1,3 @@
-/*
- * Copyright 1993-2015 NVIDIA Corporation.  All rights reserved.
- *
- * Please refer to the NVIDIA end user license agreement (EULA) associated
- * with this source code for terms and conditions that govern your use of
- * this software. Any use, reproduction, disclosure, or distribution of
- * this software and related documentation outside the terms of the EULA
- * is strictly prohibited.
- *
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -84,6 +73,15 @@ void deleteTexture(void)
 
 // This method adds constant force vectors to the velocity field
 // stored in 'v' according to v(x,t+1) = v(x,t) + dt * f.
+extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r)
+{
+
+	dim3 tids(2 * r + 1, 2 * r + 1);
+
+	addForces_k<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
+	getLastCudaError("addForces_k failed.");
+}
+
 __global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r, size_t pitch)
 {
 
@@ -104,6 +102,19 @@ __global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx
 // trace velocity vectors back in time to update each grid cell.
 // That is, v(x,t+1) = v(p(x,-dt),t). Here we perform bilinear
 // interpolation in the velocity space.
+
+extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt)
+{
+	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
+
+	dim3 tids(TIDSX, TIDSY);
+
+	updateTexture(v, DIM * sizeof(cData), DIM, tPitch);
+	advectVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, dt, TILEY / TIDSY, texObj);
+
+	getLastCudaError("advectVelocity_k failed.");
+}
+
 __global__ void advectVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t texObject)
 {
 
@@ -146,6 +157,25 @@ __global__ void advectVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx
 // and k is the wavenumber. The projection step forces the Fourier
 // velocity vectors to be orthogonal to the vectors for each
 // wavenumber: v(k,t) = v(k,t) - ((k dot v(k,t) * k) / k^2.
+
+extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc)
+{
+	// Forward FFT
+	checkCudaErrors(cufftExecR2C(planr2c, (cufftReal *)vx, (cufftComplex *)vx));
+	checkCudaErrors(cufftExecR2C(planr2c, (cufftReal *)vy, (cufftComplex *)vy));
+
+	uint3 grid = make_uint3((dx / TILEX) + (!(dx % TILEX) ? 0 : 1),
+							(dy / TILEY) + (!(dy % TILEY) ? 0 : 1), 1);
+	uint3 tids = make_uint3(TIDSX, TIDSY, 1);
+
+	diffuseProject_k<<<grid, tids>>>(vx, vy, dx, dy, dt, visc, TILEY / TIDSY);
+	getLastCudaError("diffuseProject_k failed.");
+
+	// Inverse FFT
+	checkCudaErrors(cufftExecC2R(planc2r, (cufftComplex *)vx, (cufftReal *)vx));
+	checkCudaErrors(cufftExecC2R(planc2r, (cufftComplex *)vy, (cufftReal *)vy));
+}
+
 __global__ void diffuseProject_k(cData *vx, cData *vy, int dx, int dy, float dt, float visc, int lb)
 {
 
@@ -206,6 +236,16 @@ __global__ void diffuseProject_k(cData *vx, cData *vy, int dx, int dy, float dt,
 // This method updates the velocity field 'v' using the two complex
 // arrays from the previous step: 'vx' and 'vy'. Here we scale the
 // real components by 1/(dx*dy) to account for an unnormalized FFT.
+
+extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy)
+{
+	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
+	dim3 tids(TIDSX, TIDSY);
+
+	updateVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, TILEY / TIDSY, tPitch);
+	getLastCudaError("updateVelocity_k failed.");
+}
+
 __global__ void updateVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx, int dy, int lb, size_t pitch)
 {
 
@@ -245,6 +285,28 @@ __global__ void updateVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx
 // This method updates the particles by moving particle positions
 // according to the velocity field and time step. That is, for each
 // particle: p(t+1) = p(t) + dt * v(p(t)).
+
+extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt)
+{
+	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
+	dim3 tids(TIDSX, TIDSY);
+
+	cData *p;
+	cudaGraphicsMapResources(1, &cuda_vbo_resource, 0);
+	getLastCudaError("cudaGraphicsMapResources failed");
+
+	size_t num_bytes;
+	cudaGraphicsResourceGetMappedPointer((void **)&p, &num_bytes,
+										 cuda_vbo_resource);
+	getLastCudaError("cudaGraphicsResourceGetMappedPointer failed");
+
+	advectParticles_k<<<grid, tids>>>(p, v, dx, dy, dt, TILEY / TIDSY, tPitch);
+	getLastCudaError("advectParticles_k failed.");
+
+	cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0);
+	getLastCudaError("cudaGraphicsUnmapResources failed");
+}
+
 __global__ void advectParticles_k(cData *part, cData *v, int dx, int dy, float dt, int lb, size_t pitch)
 {
 	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -294,75 +356,4 @@ __global__ void advectParticles_k(cData *part, cData *v, int dx, int dy, float d
 			}
 		} // If this thread is inside the domain in Y
 	}	  // If this thread is inside the domain in X
-}
-
-// These are the external function calls necessary for launching fluid simulation
-
-extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r)
-{
-
-	dim3 tids(2 * r + 1, 2 * r + 1);
-
-	addForces_k<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
-	getLastCudaError("addForces_k failed.");
-}
-
-extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt)
-{
-	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
-
-	dim3 tids(TIDSX, TIDSY);
-
-	updateTexture(v, DIM * sizeof(cData), DIM, tPitch);
-	advectVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, dt, TILEY / TIDSY, texObj);
-
-	getLastCudaError("advectVelocity_k failed.");
-}
-
-extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc)
-{
-	// Forward FFT
-	checkCudaErrors(cufftExecR2C(planr2c, (cufftReal *)vx, (cufftComplex *)vx));
-	checkCudaErrors(cufftExecR2C(planr2c, (cufftReal *)vy, (cufftComplex *)vy));
-
-	uint3 grid = make_uint3((dx / TILEX) + (!(dx % TILEX) ? 0 : 1),
-							(dy / TILEY) + (!(dy % TILEY) ? 0 : 1), 1);
-	uint3 tids = make_uint3(TIDSX, TIDSY, 1);
-
-	diffuseProject_k<<<grid, tids>>>(vx, vy, dx, dy, dt, visc, TILEY / TIDSY);
-	getLastCudaError("diffuseProject_k failed.");
-
-	// Inverse FFT
-	checkCudaErrors(cufftExecC2R(planc2r, (cufftComplex *)vx, (cufftReal *)vx));
-	checkCudaErrors(cufftExecC2R(planc2r, (cufftComplex *)vy, (cufftReal *)vy));
-}
-
-extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy)
-{
-	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
-	dim3 tids(TIDSX, TIDSY);
-
-	updateVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, TILEY / TIDSY, tPitch);
-	getLastCudaError("updateVelocity_k failed.");
-}
-
-extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt)
-{
-	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
-	dim3 tids(TIDSX, TIDSY);
-
-	cData *p;
-	cudaGraphicsMapResources(1, &cuda_vbo_resource, 0);
-	getLastCudaError("cudaGraphicsMapResources failed");
-
-	size_t num_bytes;
-	cudaGraphicsResourceGetMappedPointer((void **)&p, &num_bytes,
-										 cuda_vbo_resource);
-	getLastCudaError("cudaGraphicsResourceGetMappedPointer failed");
-
-	advectParticles_k<<<grid, tids>>>(p, v, dx, dy, dt, TILEY / TIDSY, tPitch);
-	getLastCudaError("advectParticles_k failed.");
-
-	cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0);
-	getLastCudaError("cudaGraphicsUnmapResources failed");
 }
