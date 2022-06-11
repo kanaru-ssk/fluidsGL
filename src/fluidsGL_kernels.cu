@@ -73,6 +73,7 @@ void deleteTexture(void)
 
 // This method adds constant force vectors to the velocity field
 // stored in 'v' according to v(x,t+1) = v(x,t) + dt * f.
+// 外力が加わった時の処理
 extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r)
 {
 
@@ -103,6 +104,7 @@ __global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx
 // That is, v(x,t+1) = v(p(x,-dt),t). Here we perform bilinear
 // interpolation in the velocity space.
 
+// 移流を計算
 extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt)
 {
 	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
@@ -158,6 +160,7 @@ __global__ void advectVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx
 // velocity vectors to be orthogonal to the vectors for each
 // wavenumber: v(k,t) = v(k,t) - ((k dot v(k,t) * k) / k^2.
 
+// 拡散を計算
 extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc)
 {
 	// Forward FFT
@@ -330,18 +333,7 @@ __global__ void advectParticles_k(cData *part, cData *v, int dx, int dy, float d
 
 				int xvi = ((int)(pterm.x * dx));
 				int yvi = ((int)(pterm.y * dy));
-				//				vterm = *((cData *)((char *)v + yvi * pitch) + xvi);
 				vterm = *((cData *)((char *)v + yvi * pitch) + xvi);
-				/*
-								pterm.x += dt * vterm.x;
-								pterm.x = pterm.x - (int)pterm.x;
-								pterm.x += 1.f;
-								pterm.x = pterm.x - (int)pterm.x;
-								pterm.y += dt * vterm.y;
-								pterm.y = pterm.y - (int)pterm.y;
-								pterm.y += 1.f;
-								pterm.y = pterm.y - (int)pterm.y;
-				*/
 
 				pterm.x += dt * vterm.x;
 				pterm.x = pterm.x - (int)pterm.x;

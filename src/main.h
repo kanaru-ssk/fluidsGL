@@ -12,7 +12,7 @@
 #define PDS (DIM * CPADW)         // Padded total prticles size
 
 #define DT 0.09f           // Delta T for interative solver
-#define VISCOSITY 0.005f   // Viscosity constant
+#define VISCOSITY 0.0025f  // Viscosity constant
 #define FORCE (5.8f * DIM) // Force scale factor
 #define FR 4               // Force update radius
 
