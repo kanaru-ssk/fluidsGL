@@ -211,15 +211,16 @@ void app::keyPressed(unsigned char key)
 
 void app::mousePressed(int x, int y, int button, int state)
 {
+	int _y = -y + wHeight;
 	lastx = x;
-	lasty = y;
+	lasty = _y;
 	clicked = !clicked;
 }
 
 void app::mouseDragged(int x, int y)
 {
-	y *= -1.0;
-	y += wHeight;
+
+	int _y = -y + wHeight;
 	float fx = (lastx / (float)wWidth);
 	float fy = (lasty / (float)wHeight);
 	int nx = (int)(fx * DIM);
@@ -228,15 +229,16 @@ void app::mouseDragged(int x, int y)
 	if (clicked && nx < DIM - FR && nx > FR - 1 && ny < DIM - FR && ny > FR - 1)
 	{
 		int ddx = x - lastx;
-		int ddy = y - lasty;
+		int ddy = _y - lasty;
 		fx = ddx / (float)wWidth;
 		fy = ddy / (float)wHeight;
 		int spy = ny - FR;
 		int spx = nx - FR;
+
 		addForces(dvfield, DIM, DIM, spx, spy, FORCE * DT * fx, FORCE * DT * fy, FR);
 
 		lastx = x;
-		lasty = y;
+		lasty = _y;
 	}
 
 	glutPostRedisplay(); // openGLに再描画を指示

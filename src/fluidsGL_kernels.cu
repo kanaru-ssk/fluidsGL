@@ -88,12 +88,15 @@ __global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx
 
 	int tx = threadIdx.x;
 	int ty = threadIdx.y;
-	cData *fj = (cData *)((char *)v + (ty + spy) * pitch) + tx + spx;
+	cData *fj = (cData *)((char *)v + (ty + spy) * pitch) + tx + spx; // 速度配列ないのグローバルスレッド位置
 
 	cData vterm = *fj;
 	tx -= r;
 	ty -= r;
+
+	// 滑らかにするために減衰を計算
 	float s = 1.f / (1.f + tx * tx * tx * tx + ty * ty * ty * ty);
+
 	vterm.x += s * fx;
 	vterm.y += s * fy;
 	*fj = vterm;
@@ -219,9 +222,9 @@ __global__ void diffuseProject_k(cData *vx, cData *vy, int dx, int dy, float dt,
 				if (kk > 0.f)
 				{
 					float rkk = 1.f / kk;
-					// Real portion of velocity projection
+					// (実数部分) Real portion of velocity projection
 					float rkp = (iix * xterm.x + iiy * yterm.x);
-					// Imaginary portion of velocity projection
+					// (虚数部分) Imaginary portion of velocity projection
 					float ikp = (iix * xterm.y + iiy * yterm.y);
 					xterm.x -= rkk * rkp * iix;
 					xterm.y -= rkk * ikp * iix;
