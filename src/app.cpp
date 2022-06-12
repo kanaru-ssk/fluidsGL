@@ -126,20 +126,6 @@ void app::update(void)
 	glutPostRedisplay(); // openGLに再描画を指示
 }
 
-void app::defineViewMatrix(void)
-{
-	double eye[3] = {0.5, 0.5, 1.0};
-	double center[3] = {0.5, 0.5, 0.0};
-	double up[3] = {0.0, 1.0, 0.0};
-	glMatrixMode(GL_PROJECTION);
-	glLoadIdentity();
-	gluPerspective(60.0, (double)wWidth / wHeight, 0.1, 100.0);
-	glViewport(0, 0, wWidth, wHeight);
-	glMatrixMode(GL_MODELVIEW);
-	glLoadIdentity();
-	gluLookAt(eye[X], eye[Y], eye[Z], center[X], center[Y], center[Z], up[X], up[Y], up[Z]);
-}
-
 void app::draw(void)
 {
 	defineViewMatrix();
@@ -182,6 +168,20 @@ void app::draw(void)
 	}
 }
 
+void app::defineViewMatrix(void)
+{
+	double eye[3] = {0.5, 0.5, 1.0};
+	double center[3] = {0.5, 0.5, 0.0};
+	double up[3] = {0.0, 1.0, 0.0};
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	gluPerspective(60.0, (double)wWidth / wHeight, 0.1, 100.0);
+	glViewport(0, 0, wWidth, wHeight);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	gluLookAt(eye[X], eye[Y], eye[Z], center[X], center[Y], center[Z], up[X], up[Y], up[Z]);
+}
+
 void app::keyPressed(unsigned char key)
 {
 	switch (key)
@@ -211,16 +211,15 @@ void app::keyPressed(unsigned char key)
 
 void app::mousePressed(int x, int y, int button, int state)
 {
-	int _y = -y + wHeight;
+	y = -y + wHeight;
 	lastx = x;
-	lasty = _y;
+	lasty = y;
 	clicked = !clicked;
 }
 
 void app::mouseDragged(int x, int y)
 {
-
-	int _y = -y + wHeight;
+	y = -y + wHeight;
 	float fx = (lastx / (float)wWidth);
 	float fy = (lasty / (float)wHeight);
 	int nx = (int)(fx * DIM);
@@ -229,7 +228,7 @@ void app::mouseDragged(int x, int y)
 	if (clicked && nx < DIM - FR && nx > FR - 1 && ny < DIM - FR && ny > FR - 1)
 	{
 		int ddx = x - lastx;
-		int ddy = _y - lasty;
+		int ddy = y - lasty;
 		fx = ddx / (float)wWidth;
 		fy = ddy / (float)wHeight;
 		int spy = ny - FR;
@@ -238,7 +237,7 @@ void app::mouseDragged(int x, int y)
 		addForces(dvfield, DIM, DIM, spx, spy, FORCE * DT * fx, FORCE * DT * fy, FR);
 
 		lastx = x;
-		lasty = _y;
+		lasty = y;
 	}
 
 	glutPostRedisplay(); // openGLに再描画を指示

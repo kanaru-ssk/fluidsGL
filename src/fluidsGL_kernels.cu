@@ -79,16 +79,16 @@ extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, 
 
 	dim3 tids(2 * r + 1, 2 * r + 1);
 
-	addForces_k<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
+	d_addForces<<<1, tids>>>(v, dx, dy, spx, spy, fx, fy, r, tPitch);
 	getLastCudaError("addForces_k failed.");
 }
 
-__global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r, size_t pitch)
+__global__ void d_addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r, size_t pitch)
 {
 
 	int tx = threadIdx.x;
 	int ty = threadIdx.y;
-	cData *fj = (cData *)((char *)v + (ty + spy) * pitch) + tx + spx; // 速度配列ないのグローバルスレッド位置
+	cData *fj = (cData *)((char *)v + (ty + spy) * pitch) + tx + spx; // 速度配列内のグローバルスレッド位置
 
 	cData vterm = *fj;
 	tx -= r;
@@ -99,6 +99,8 @@ __global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx
 
 	vterm.x += s * fx;
 	vterm.y += s * fy;
+	// vterm.x += fx;
+	// vterm.y += fy;
 	*fj = vterm;
 }
 
@@ -115,12 +117,12 @@ extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, 
 	dim3 tids(TIDSX, TIDSY);
 
 	updateTexture(v, DIM * sizeof(cData), DIM, tPitch);
-	advectVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, dt, TILEY / TIDSY, texObj);
+	d_advectVelocity<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, dt, TILEY / TIDSY, texObj);
 
 	getLastCudaError("advectVelocity_k failed.");
 }
 
-__global__ void advectVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t texObject)
+__global__ void d_advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t texObject)
 {
 
 	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -174,7 +176,7 @@ extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, f
 							(dy / TILEY) + (!(dy % TILEY) ? 0 : 1), 1);
 	uint3 tids = make_uint3(TIDSX, TIDSY, 1);
 
-	diffuseProject_k<<<grid, tids>>>(vx, vy, dx, dy, dt, visc, TILEY / TIDSY);
+	d_diffuseProject<<<grid, tids>>>(vx, vy, dx, dy, dt, visc, TILEY / TIDSY);
 	getLastCudaError("diffuseProject_k failed.");
 
 	// Inverse FFT
@@ -182,9 +184,8 @@ extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, f
 	checkCudaErrors(cufftExecC2R(planc2r, (cufftComplex *)vy, (cufftReal *)vy));
 }
 
-__global__ void diffuseProject_k(cData *vx, cData *vy, int dx, int dy, float dt, float visc, int lb)
+__global__ void d_diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc, int lb)
 {
-
 	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
 	int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
 	int p;
@@ -248,11 +249,11 @@ extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, 
 	dim3 grid((dx / TILEX) + (!(dx % TILEX) ? 0 : 1), (dy / TILEY) + (!(dy % TILEY) ? 0 : 1));
 	dim3 tids(TIDSX, TIDSY);
 
-	updateVelocity_k<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, TILEY / TIDSY, tPitch);
+	d_updateVelocity<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, TILEY / TIDSY, tPitch);
 	getLastCudaError("updateVelocity_k failed.");
 }
 
-__global__ void updateVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx, int dy, int lb, size_t pitch)
+__global__ void d_updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, int lb, size_t pitch)
 {
 
 	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -306,11 +307,213 @@ extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt)
 										 cuda_vbo_resource);
 	getLastCudaError("cudaGraphicsResourceGetMappedPointer failed");
 
-	advectParticles_k<<<grid, tids>>>(p, v, dx, dy, dt, TILEY / TIDSY, tPitch);
+	d_advectParticles<<<grid, tids>>>(p, v, dx, dy, dt, TILEY / TIDSY, tPitch);
 	getLastCudaError("advectParticles_k failed.");
 
 	cudaGraphicsUnmapResources(1, &cuda_vbo_resource, 0);
 	getLastCudaError("cudaGraphicsUnmapResources failed");
+}
+
+__global__ void d_advectParticles(cData *part, cData *v, int dx, int dy, float dt, int lb, size_t pitch)
+{
+	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
+	int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
+	int p;
+
+	// gtidx is the domain location in x for this thread
+	cData pterm, vterm;
+
+	if (gtidx < dx)
+	{
+		for (p = 0; p < lb; p++)
+		{
+			// fi is the domain location in y for this thread
+			int fi = gtidy + p;
+
+			if (fi < dy)
+			{
+				int fj = fi * dx + gtidx;
+				pterm = part[fj];
+
+				// 粒子が速度場のどこに存在するか算出
+				int xvi = ((int)(pterm.x * dx));
+				int yvi = ((int)(pterm.y * dy));
+
+				// 粒子の位置の速度を抽出
+				vterm = *((cData *)((char *)v + yvi * pitch) + xvi);
+
+				// pterm.x += dt * vterm.x;
+				// pterm.x *= (-2 * (0 < pterm.x) + 1); // 0 < pterm.x の時反発
+				// vterm.x *= (-2 * (0 < pterm.x) + 1);
+				// pterm.x -= ((pterm.x < 1) * 2 * (pterm.x - (int)pterm.x)); // pterm.x < 1 の時反発
+				// vterm.x *= (-2 * (pterm.x < 1) + 1);
+
+				// pterm.y += dt * vterm.y;
+				// pterm.y *= (-2 * (0 < pterm.y) + 1); // 0 < pterm.x の時反発
+				// vterm.y *= (-2 * (0 < pterm.y) + 1);
+				// pterm.y -= ((pterm.y < 1) * 2 * (pterm.y - (int)pterm.y)); // pterm.x < 1 の時反発
+				// vterm.y *= (-2 * (pterm.y < 1) + 1);
+
+				pterm.x += dt * vterm.x;		  // 経過時間 * x方向速度
+				pterm.x = pterm.x - (int)pterm.x; // 整数部分削除 (-1.0 ~ 1.0)
+				pterm.x += 1.f;					  // (0.0 ~ 2.0)
+				pterm.x = pterm.x - (int)pterm.x; // 整数部分削除 (0.0 ~ 1.0)
+				pterm.y += dt * vterm.y;
+				pterm.y = pterm.y - (int)pterm.y;
+				pterm.y += 1.f;
+				pterm.y = pterm.y - (int)pterm.y;
+
+				part[fj] = pterm;
+			}
+		} // If this thread is inside the domain in Y
+	}	  // If this thread is inside the domain in X
+}
+
+__global__ void addForces_k(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r, size_t pitch)
+{
+
+	int tx = threadIdx.x;
+	int ty = threadIdx.y;
+	cData *fj = (cData *)((char *)v + (ty + spy) * pitch) + tx + spx; // 速度配列内のグローバルスレッド位置
+
+	cData vterm = *fj;
+	tx -= r;
+	ty -= r;
+
+	// 滑らかにするために減衰を計算
+	float s = 1.f / (1.f + tx * tx * tx * tx + ty * ty * ty * ty);
+
+	vterm.x += s * fx;
+	vterm.y += s * fy;
+	// vterm.x += fx;
+	// vterm.y += fy;
+	*fj = vterm;
+}
+
+__global__ void advectVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t texObject)
+{
+
+	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
+	int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
+	int p;
+
+	cData vterm, ploc;
+	float vxterm, vyterm;
+
+	// gtidx is the domain location in x for this thread
+	if (gtidx < dx)
+	{
+		for (p = 0; p < lb; p++)
+		{
+			// fi is the domain location in y for this thread
+			int fi = gtidy + p;
+
+			if (fi < dy)
+			{
+				int fj = fi * pdx + gtidx;
+				vterm = tex2D<cData>(texObject, (float)gtidx, (float)fi);
+				ploc.x = (gtidx + 0.5f) - (dt * vterm.x * dx);
+				ploc.y = (fi + 0.5f) - (dt * vterm.y * dy);
+				vterm = tex2D<cData>(texObject, ploc.x, ploc.y);
+				vxterm = vterm.x;
+				vyterm = vterm.y;
+				vx[fj] = vxterm;
+				vy[fj] = vyterm;
+			}
+		}
+	}
+}
+
+__global__ void diffuseProject_k(cData *vx, cData *vy, int dx, int dy, float dt, float visc, int lb)
+{
+	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
+	int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
+	int p;
+
+	cData xterm, yterm;
+
+	// gtidx is the domain location in x for this thread
+	if (gtidx < dx)
+	{
+		for (p = 0; p < lb; p++)
+		{
+			// fi is the domain location in y for this thread
+			int fi = gtidy + p;
+
+			if (fi < dy)
+			{
+				int fj = fi * dx + gtidx;
+				xterm = vx[fj];
+				yterm = vy[fj];
+
+				// Compute the index of the wavenumber based on the
+				// data order produced by a standard NN FFT.
+				int iix = gtidx;
+				int iiy = (fi > dy / 2) ? (fi - (dy)) : fi;
+
+				// Velocity diffusion
+				float kk = (float)(iix * iix + iiy * iiy); // k^2
+				float diff = 1.f / (1.f + visc * dt * kk);
+				xterm.x *= diff;
+				xterm.y *= diff;
+				yterm.x *= diff;
+				yterm.y *= diff;
+
+				// Velocity projection
+				if (kk > 0.f)
+				{
+					float rkk = 1.f / kk;
+					// (実数部分) Real portion of velocity projection
+					float rkp = (iix * xterm.x + iiy * yterm.x);
+					// (虚数部分) Imaginary portion of velocity projection
+					float ikp = (iix * xterm.y + iiy * yterm.y);
+					xterm.x -= rkk * rkp * iix;
+					xterm.y -= rkk * ikp * iix;
+					yterm.x -= rkk * rkp * iiy;
+					yterm.y -= rkk * ikp * iiy;
+				}
+
+				vx[fj] = xterm;
+				vy[fj] = yterm;
+			}
+		}
+	}
+}
+
+__global__ void updateVelocity_k(cData *v, float *vx, float *vy, int dx, int pdx, int dy, int lb, size_t pitch)
+{
+
+	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
+	int gtidy = blockIdx.y * (lb * blockDim.y) + threadIdx.y * lb;
+	int p;
+
+	float vxterm, vyterm;
+	cData nvterm;
+
+	// gtidx is the domain location in x for this thread
+	if (gtidx < dx)
+	{
+		for (p = 0; p < lb; p++)
+		{
+			// fi is the domain location in y for this thread
+			int fi = gtidy + p;
+
+			if (fi < dy)
+			{
+				int fjr = fi * pdx + gtidx;
+				vxterm = vx[fjr];
+				vyterm = vy[fjr];
+
+				// Normalize the result of the inverse FFT
+				float scale = 1.f / (dx * dy);
+				nvterm.x = vxterm * scale;
+				nvterm.y = vyterm * scale;
+
+				cData *fj = (cData *)((char *)v + fi * pitch) + gtidx;
+				*fj = nvterm;
+			}
+		} // If this thread is inside the domain in Y
+	}	  // If this thread is inside the domain in X
 }
 
 __global__ void advectParticles_k(cData *part, cData *v, int dx, int dy, float dt, int lb, size_t pitch)
@@ -334,14 +537,29 @@ __global__ void advectParticles_k(cData *part, cData *v, int dx, int dy, float d
 				int fj = fi * dx + gtidx;
 				pterm = part[fj];
 
+				// 粒子が速度場のどこに存在するか算出
 				int xvi = ((int)(pterm.x * dx));
 				int yvi = ((int)(pterm.y * dy));
+
+				// 粒子の位置の速度を抽出
 				vterm = *((cData *)((char *)v + yvi * pitch) + xvi);
 
-				pterm.x += dt * vterm.x;
-				pterm.x = pterm.x - (int)pterm.x;
-				pterm.x += 1.f;
-				pterm.x = pterm.x - (int)pterm.x;
+				// pterm.x += dt * vterm.x;
+				// pterm.x *= (-2 * (0 < pterm.x) + 1); // 0 < pterm.x の時反発
+				// vterm.x *= (-2 * (0 < pterm.x) + 1);
+				// pterm.x -= ((pterm.x < 1) * 2 * (pterm.x - (int)pterm.x)); // pterm.x < 1 の時反発
+				// vterm.x *= (-2 * (pterm.x < 1) + 1);
+
+				// pterm.y += dt * vterm.y;
+				// pterm.y *= (-2 * (0 < pterm.y) + 1); // 0 < pterm.x の時反発
+				// vterm.y *= (-2 * (0 < pterm.y) + 1);
+				// pterm.y -= ((pterm.y < 1) * 2 * (pterm.y - (int)pterm.y)); // pterm.x < 1 の時反発
+				// vterm.y *= (-2 * (pterm.y < 1) + 1);
+
+				pterm.x += dt * vterm.x;		  // 経過時間 * x方向速度
+				pterm.x = pterm.x - (int)pterm.x; // 整数部分削除 (-1.0 ~ 1.0)
+				pterm.x += 1.f;					  // (0.0 ~ 2.0)
+				pterm.x = pterm.x - (int)pterm.x; // 整数部分削除 (0.0 ~ 1.0)
 				pterm.y += dt * vterm.y;
 				pterm.y = pterm.y - (int)pterm.y;
 				pterm.y += 1.f;
