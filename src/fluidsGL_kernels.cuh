@@ -26,7 +26,7 @@ advectVelocity_k(cData *v, float *vx, float *vy,
                  int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t tex);
 
 __global__ void
-d_advectVelocity(cData *v, float *vx, float *vy,
+d_advectVelocity(float *vx, float *vy,
                  int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t tex);
 
 // This method performs velocity diffusion and forces mass conservation

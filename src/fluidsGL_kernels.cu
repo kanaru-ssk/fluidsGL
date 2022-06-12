@@ -117,12 +117,12 @@ extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, 
 	dim3 tids(TIDSX, TIDSY);
 
 	updateTexture(v, DIM * sizeof(cData), DIM, tPitch);
-	d_advectVelocity<<<grid, tids>>>(v, vx, vy, dx, pdx, dy, dt, TILEY / TIDSY, texObj);
+	d_advectVelocity<<<grid, tids>>>(vx, vy, dx, pdx, dy, dt, TILEY / TIDSY, texObj);
 
 	getLastCudaError("advectVelocity_k failed.");
 }
 
-__global__ void d_advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t texObject)
+__global__ void d_advectVelocity(float *vx, float *vy, int dx, int pdx, int dy, float dt, int lb, cudaTextureObject_t texObject)
 {
 
 	int gtidx = blockIdx.x * blockDim.x + threadIdx.x;
