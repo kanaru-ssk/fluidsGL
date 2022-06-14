@@ -17,15 +17,14 @@
 // CUFFT plan handle
 cufftHandle planr2c;
 cufftHandle planc2r;
-static cData *vxfield = NULL;
-static cData *vyfield = NULL;
+static float2 *vxfield = NULL;
+static float2 *vyfield = NULL;
 
-cData *hvfield = NULL; // host velocity field
-cData *dvfield = NULL; // device velocity field
-static int wWidth = MAX(512, DIM);
-static int wHeight = MAX(512, DIM);
+float2 *hvfield = NULL; // host velocity field
+float2 *dvfield = NULL; // device velocity field
+static int windowWidth = MAX(512, FIELD_DIV);
+static int windowHeight = MAX(512, FIELD_DIV);
 
-static bool clicked = false;
 static int fpsCount = 0;
 static int fpsLimit = 1;
 StopWatchInterface *timer = NULL;
@@ -33,11 +32,11 @@ StopWatchInterface *timer = NULL;
 // Particle data
 GLuint vbo = 0;									// OpenGL vertex buffer object
 struct cudaGraphicsResource *cuda_vbo_resource; // handles OpenGL-CUDA exchange
-static cData *particles = NULL;					// particle positions in host memory
-static int lastx = 0, lasty = 0;
+static float2 *particles = NULL;				// particle positions in host memory
+static int lastX = 0, lastY = 0;
 
 // Texture pitch
-size_t tPitch = 0; // Now this is compatible with gcc in 64-bit
+size_t tPitch;
 
 char *ref_file = NULL;
 bool g_bQAAddTestForce = true;
@@ -49,11 +48,11 @@ bool g_bExitESC = false;
 // CheckFBO/BackBuffer class objects
 CheckRender *g_CheckRender = NULL;
 
-extern "C" void addForces(cData *v, int dx, int dy, int spx, int spy, float fx, float fy, int r);
-extern "C" void advectVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy, float dt);
-extern "C" void diffuseProject(cData *vx, cData *vy, int dx, int dy, float dt, float visc);
-extern "C" void updateVelocity(cData *v, float *vx, float *vy, int dx, int pdx, int dy);
-extern "C" void advectParticles(GLuint vbo, cData *v, int dx, int dy, float dt);
+extern "C" void addForces(float2 *v, int spx, int spy, float forceX, float forceY);
+extern "C" void advectVelocity(float2 *v);
+extern "C" void diffuseProject(float2 *vx, float2 *vy, int dx, int dy, float dt, float visc);
+extern "C" void updateVelocity(float2 *v, float *vx, float *vy, int dx, int pdx, int dy);
+extern "C" void advectParticles(GLuint vbo, float2 *v, int dx, int dy, float dt);
 
 void app::setup(void)
 {
@@ -62,47 +61,48 @@ void app::setup(void)
 	sdkResetTimer(&timer);
 
 	// Allocate and initialize host data
-	hvfield = (cData *)malloc(sizeof(cData) * NUM_PRTICLES);
-	memset(hvfield, 0, sizeof(cData) * NUM_PRTICLES);
+	hvfield = (float2 *)malloc(sizeof(float2) * NUM_PRTICLES);
+	memset(hvfield, 0, sizeof(float2) * NUM_PRTICLES);
 
 	// Allocate and initialize device data
-	cudaMallocPitch((void **)&dvfield, &tPitch, sizeof(cData) * DIM, DIM);
+	// tPitch = 8 * 512 = 4096
+	cudaMallocPitch((void **)&dvfield, &tPitch, sizeof(float2) * FIELD_DIV, FIELD_DIV);
 
 	// host to dicice
-	cudaMemcpy(dvfield, hvfield, sizeof(cData) * NUM_PRTICLES, cudaMemcpyHostToDevice);
+	cudaMemcpy(dvfield, hvfield, sizeof(float2) * NUM_PRTICLES, cudaMemcpyHostToDevice);
 
 	// Temporary complex velocity field data
-	cudaMalloc((void **)&vxfield, sizeof(cData) * PDS);
-	cudaMalloc((void **)&vyfield, sizeof(cData) * PDS);
+	cudaMalloc((void **)&vxfield, sizeof(float2) * PDS);
+	cudaMalloc((void **)&vyfield, sizeof(float2) * PDS);
 
-	setupTexture(DIM, DIM);
+	setupTexture(FIELD_DIV, FIELD_DIV);
 
 	// Create particle array
-	particles = (cData *)malloc(sizeof(cData) * NUM_PRTICLES);
-	memset(particles, 0, sizeof(cData) * NUM_PRTICLES);
+	particles = (float2 *)malloc(sizeof(float2) * NUM_PRTICLES);
+	memset(particles, 0, sizeof(float2) * NUM_PRTICLES);
 
 	// 初期位置設定
-	for (unsigned int y = 0; y < DIM; y++)
+	for (unsigned int y = 0; y < FIELD_DIV; y++)
 	{
-		for (unsigned int x = 0; x < DIM; x++)
+		for (unsigned int x = 0; x < FIELD_DIV; x++)
 		{
-			particles[y * DIM + x].x = (float)x / (float)DIM;
-			particles[y * DIM + x].y = (float)y / (float)DIM;
+			particles[y * FIELD_DIV + x].x = (float)x / (float)FIELD_DIV;
+			particles[y * FIELD_DIV + x].y = (float)y / (float)FIELD_DIV;
 		}
 	}
 
 	// Create CUFFT transform plan configuration
-	checkCudaErrors(cufftPlan2d(&planr2c, DIM, DIM, CUFFT_R2C));
-	checkCudaErrors(cufftPlan2d(&planc2r, DIM, DIM, CUFFT_C2R));
+	checkCudaErrors(cufftPlan2d(&planr2c, FIELD_DIV, FIELD_DIV, CUFFT_R2C));
+	checkCudaErrors(cufftPlan2d(&planc2r, FIELD_DIV, FIELD_DIV, CUFFT_C2R));
 
 	glGenBuffers(1, &vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(cData) * NUM_PRTICLES, particles, GL_DYNAMIC_DRAW_ARB);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(float2) * NUM_PRTICLES, particles, GL_DYNAMIC_DRAW_ARB);
 
 	GLint bsize; // Allocate and initialize host data
 	glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize);
 
-	if (bsize != (sizeof(cData) * NUM_PRTICLES))
+	if (bsize != (sizeof(float2) * NUM_PRTICLES))
 	{
 		printf("Failed to initialize GL extensions.\n");
 		exit(EXIT_FAILURE);
@@ -118,10 +118,10 @@ void app::update(void)
 {
 	sdkStartTimer(&timer);
 
-	advectVelocity(dvfield, (float *)vxfield, (float *)vyfield, DIM, RPADW, DIM, DT);
-	diffuseProject(vxfield, vyfield, CPADW, DIM, DT, VISCOSITY);
-	updateVelocity(dvfield, (float *)vxfield, (float *)vyfield, DIM, RPADW, DIM);
-	advectParticles(vbo, dvfield, DIM, DIM, DT);
+	advectVelocity(dvfield);
+	// diffuseProject(vxfield, vyfield, CPADW, FIELD_DIV, DT, VISCOSITY);
+	// updateVelocity(dvfield, (float *)vxfield, (float *)vyfield, FIELD_DIV, FIELD_DIV);
+	advectParticles(vbo, dvfield, FIELD_DIV, FIELD_DIV, DT);
 
 	glutPostRedisplay(); // openGLに再描画を指示
 }
@@ -160,7 +160,7 @@ void app::draw(void)
 	{
 		char fps[256];
 		float ifps = 1.f / (sdkGetAverageTimerValue(&timer) / 1000.f);
-		sprintf(fps, "Cuda/GL Stable Fluids (%d x %d): %3.1f fps", DIM, DIM, ifps);
+		sprintf(fps, "Cuda/GL Stable Fluids (%d x %d): %3.1f fps", FIELD_DIV, FIELD_DIV, ifps);
 		glutSetWindowTitle(fps);
 		fpsCount = 0;
 		fpsLimit = (int)MAX(ifps, 1.f);
@@ -170,13 +170,13 @@ void app::draw(void)
 
 void app::defineViewMatrix(void)
 {
-	double eye[3] = {0.5, 0.5, 1.0};
+	double eye[3] = {0.5, 0.5, 0.91};
 	double center[3] = {0.5, 0.5, 0.0};
 	double up[3] = {0.0, 1.0, 0.0};
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(60.0, (double)wWidth / wHeight, 0.1, 100.0);
-	glViewport(0, 0, wWidth, wHeight);
+	gluPerspective(60.0, (double)windowWidth / windowHeight, 0.1, 100.0);
+	glViewport(0, 0, windowWidth, windowHeight);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	gluLookAt(eye[X], eye[Y], eye[Z], center[X], center[Y], center[Z], up[X], up[Y], up[Z]);
@@ -187,15 +187,15 @@ void app::keyPressed(unsigned char key)
 	switch (key)
 	{
 	case 'r':
-		memset(hvfield, 0, sizeof(cData) * NUM_PRTICLES);
-		cudaMemcpy(dvfield, hvfield, sizeof(cData) * NUM_PRTICLES, cudaMemcpyHostToDevice);
+		memset(hvfield, 0, sizeof(float2) * NUM_PRTICLES);
+		cudaMemcpy(dvfield, hvfield, sizeof(float2) * NUM_PRTICLES, cudaMemcpyHostToDevice);
 
 		cudaGraphicsUnregisterResource(cuda_vbo_resource);
 
 		getLastCudaError("cudaGraphicsUnregisterBuffer failed");
 
 		glBindBuffer(GL_ARRAY_BUFFER, vbo);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(cData) * NUM_PRTICLES,
+		glBufferData(GL_ARRAY_BUFFER, sizeof(float2) * NUM_PRTICLES,
 					 particles, GL_DYNAMIC_DRAW_ARB);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
 
@@ -211,45 +211,35 @@ void app::keyPressed(unsigned char key)
 
 void app::mousePressed(int x, int y, int button, int state)
 {
-	y = -y + wHeight;
-	lastx = x;
-	lasty = y;
-	clicked = !clicked;
+	lastX = x;
+	lastY = -y + windowHeight;
 }
 
 void app::mouseDragged(int x, int y)
 {
-	y = -y + wHeight;
-	float fx = (lastx / (float)wWidth);
-	float fy = (lasty / (float)wHeight);
-	int nx = (int)(fx * DIM);
-	int ny = (int)(fy * DIM);
-
-	if (clicked && nx < DIM - FR && nx > FR - 1 && ny < DIM - FR && ny > FR - 1)
+	if (0 < x && x < windowWidth && 0 < y && y < windowHeight)
 	{
-		int ddx = x - lastx;
-		int ddy = y - lasty;
-		fx = ddx / (float)wWidth;
-		fy = ddy / (float)wHeight;
-		int spy = ny - FR;
-		int spx = nx - FR;
+		y = -y + windowHeight;
 
-		addForces(dvfield, DIM, DIM, spx, spy, FORCE * DT * fx, FORCE * DT * fy, FR);
+		int posX = (int)(FIELD_DIV * lastX / (float)windowWidth);
+		int posY = (int)(FIELD_DIV * lastY / (float)windowHeight);
 
-		lastx = x;
-		lasty = y;
+		float forceX = FORCE * DT * (x - lastX) / (float)windowWidth;
+		float forceY = FORCE * DT * (y - lastY) / (float)windowHeight;
+
+		addForces(dvfield, posX, posY, forceX, forceY);
+
+		lastX = x;
+		lastY = y;
 	}
-
-	glutPostRedisplay(); // openGLに再描画を指示
 }
 
 void app::windowResize(int width, int height)
 {
-	wWidth = width;
-	wHeight = height;
+	windowWidth = width;
+	windowHeight = height;
 
 	defineViewMatrix();
-	glutPostRedisplay(); // openGLに再描画を指示
 }
 
 void app::end(void)

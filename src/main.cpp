@@ -44,7 +44,7 @@ void initGL(int *argc, char **argv)
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
 	glutInitWindowPosition(INIT_X_POS, INIT_Y_POS);
 	glutInitWindowSize(INIT_WIDTH, INIT_HEIGHT);
-	glutCreateWindow("Jelly-Fish");
+	glutCreateWindow("fluidGL");
 	glutIdleFunc(idle);
 	glutDisplayFunc(display);
 	glutKeyboardFunc(keyboard);
